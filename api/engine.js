@@ -11,6 +11,18 @@ export default async function handler(req, res) {
     const CANDLES_KEY = "eurusd:5m:candles";
     const STATE_KEY = "engine:state";
 
+    // --- 5 minute boundary guard ---
+    const now = new Date();
+    const minute = now.getUTCMinutes();
+
+    if (minute % 5 !== 0) {
+      return res.status(200).json({
+        ok: true,
+        skipped: true,
+        reason: "Not 5m boundary"
+      });
+    }
+
     // Load state
     let state = await kv.get(STATE_KEY);
     if (!state) {
@@ -36,7 +48,7 @@ export default async function handler(req, res) {
         low: parseFloat(c.low),
         close: parseFloat(c.close),
       }))
-      .reverse(); // oldest → newest
+      .reverse();
 
     const existing = (await kv.get(CANDLES_KEY)) || [];
 
