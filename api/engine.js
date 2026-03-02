@@ -1,51 +1,36 @@
-const {
-  kvGetJson,
-  kvSetJson,
-  fetch5mFromTwelveData,
-  mergeAndTrimCandles
-} = require("../lib/storage");
+import { kv } from "@vercel/kv";
 
-const SYMBOL = "EUR/USD";
-const KEY_CANDLES = "eurusd:5m:candles";
-const KEY_STATE = "engine:state";
-
-module.exports = async (req, res) => {
+export default async function handler(req, res) {
   try {
+    const apiKey = process.env.TWELVEDATA_API_KEY;
 
-    let state = await kvGetJson(KEY_STATE);
-    if (!state) {
-      state = { initialized: false };
+    if (!apiKey) {
+      return res.status(500).json({ ok: false, error: "Missing TWELVEDATA_API_KEY" });
     }
 
-    const outputsize = state.initialized ? 3 : 5000;
+    // Hent siste 100 5m candles
+    const symbol = "EUR/USD";
+    const interval = "5min";
 
-    const fetched = await fetch5mFromTwelveData({
-      symbol: SYMBOL,
-      outputsize
-    });
+    const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=${interval}&outputsize=100&apikey=${apiKey}`;
 
-    const existing = (await kvGetJson(KEY_CANDLES)) || [];
+    const response = await fetch(url);
+    const data = await response.json();
 
-    const merged = mergeAndTrimCandles({
-      existing,
-      incoming: fetched,
-      keepDays: 5
-    });
+    if (!data.values) {
+      return res.status(500).json({ ok: false, error: data });
+    }
 
-    await kvSetJson(KEY_CANDLES, merged);
+    // Lagre i KV
+    await kv.set("latestCandles", data.values);
 
-    state.initialized = true;
-    await kvSetJson(KEY_STATE, state);
-
-    res.status(200).json({
+    return res.status(200).json({
       ok: true,
-      candlesStored: merged.length
+      fetched: data.values.length,
+      example: data.values[0],
     });
 
   } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err.message
-    });
+    return res.status(500).json({ ok: false, error: err.message });
   }
-};
+}
