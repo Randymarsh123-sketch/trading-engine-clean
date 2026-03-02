@@ -1,5 +1,8 @@
 {
   "name": "trading-engine-clean",
   "private": true,
-  "type": "commonjs"
+  "type": "commonjs",
+  "dependencies": {
+    "@vercel/kv": "^1.0.0"
+  }
 }
