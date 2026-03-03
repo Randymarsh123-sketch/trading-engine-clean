@@ -2,17 +2,20 @@
 
 import { kv } from "@vercel/kv";
 import { checkTriggers } from "../lib/triggers.js";
+import { evaluateTrigger } from "../lib/ai.js";
 
 const SYMBOL = "EUR/USD";
 const INTERVAL = "5min";
 const MAX_CANDLES = 2000;
+const CANDLES_KEY = "eurusd:5m:candles";
 
 export default async function handler(req, res) {
   try {
+
+    // 🔒 5m boundary guard (UTC)
     const now = new Date();
     const minute = now.getUTCMinutes();
 
-    // 🔒 5m boundary guard
     if (minute % 5 !== 0) {
       return res.status(200).json({
         ok: true,
@@ -22,7 +25,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // 🔑 API key check
+    // 🔑 Ensure API key exists
     if (!process.env.TWELVEDATA_API_KEY) {
       return res.status(500).json({
         ok: false,
@@ -30,7 +33,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // 📡 Fetch from TwelveData
+    // 📡 Fetch last 3 candles
     const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(
       SYMBOL
     )}&interval=${INTERVAL}&outputsize=3&apikey=${process.env.TWELVEDATA_API_KEY}`;
@@ -48,16 +51,15 @@ export default async function handler(req, res) {
 
     const fetchedCandles = data.values.reverse(); // oldest → newest
 
-    // 📦 Get stored candles
-    let storedCandles = await kv.get("candles");
-
+    // 📦 Load stored candles
+    let storedCandles = await kv.get(CANDLES_KEY);
     if (!storedCandles) {
       storedCandles = [];
     }
 
-    // 🧠 Merge new candles (avoid duplicates)
+    // 🧠 Merge without duplicates
     const existingTimes = new Set(
-      storedCandles.map((c) => c.datetime)
+      storedCandles.map(c => c.datetime)
     );
 
     let newCount = 0;
@@ -69,19 +71,29 @@ export default async function handler(req, res) {
       }
     }
 
-    // 📏 Keep rolling window
+    // 📏 Trim to rolling window
     if (storedCandles.length > MAX_CANDLES) {
       storedCandles = storedCandles.slice(-MAX_CANDLES);
     }
 
-    // 💾 Save back to KV
-    await kv.set("candles", storedCandles);
+    // 💾 Save updated candles
+    await kv.set(CANDLES_KEY, storedCandles);
 
     // 🧠 Run trigger engine
     const triggerResult = checkTriggers(storedCandles);
 
+    let aiResult = null;
+
     if (triggerResult.triggered) {
-      console.log("🔥 Trigger fired:", triggerResult.type);
+
+      // Send last 100 candles to AI
+      const recentCandles = storedCandles.slice(-100);
+
+      aiResult = await evaluateTrigger({
+        symbol: SYMBOL,
+        trigger: triggerResult.type,
+        candles: recentCandles
+      });
     }
 
     return res.status(200).json({
@@ -89,7 +101,8 @@ export default async function handler(req, res) {
       fetched: fetchedCandles.length,
       stored: storedCandles.length,
       newCandles: newCount,
-      trigger: triggerResult
+      trigger: triggerResult,
+      ai: aiResult
     });
 
   } catch (error) {
