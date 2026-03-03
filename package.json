@@ -1,8 +1,9 @@
 {
   "name": "trading-engine-clean",
   "private": true,
-  "type": "commonjs",
+  "type": "module",
   "dependencies": {
-    "@vercel/kv": "^1.0.0"
+    "@vercel/kv": "^1.0.0",
+    "openai": "^4.0.0"
   }
 }
