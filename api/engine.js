@@ -1,7 +1,6 @@
 // api/engine.js
 
 import { kv } from "@vercel/kv";
-import { checkTriggers } from "../lib/triggers.js";
 import { evaluateTrigger } from "../lib/ai.js";
 
 const SYMBOL = "EUR/USD";
@@ -12,20 +11,18 @@ const CANDLES_KEY = "eurusd:5m:candles";
 export default async function handler(req, res) {
   try {
 
-    // 🔒 5m boundary guard (UTC)
     const now = new Date();
     const minute = now.getUTCMinutes();
 
+    // 5m boundary guard
     if (minute % 5 !== 0) {
       return res.status(200).json({
         ok: true,
         skipped: true,
-        reason: "Not 5m boundary",
         minute
       });
     }
 
-    // 🔑 Ensure API key exists
     if (!process.env.TWELVEDATA_API_KEY) {
       return res.status(500).json({
         ok: false,
@@ -33,7 +30,14 @@ export default async function handler(req, res) {
       });
     }
 
-    // 📡 Fetch last 3 candles
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(500).json({
+        ok: false,
+        error: "Missing OPENAI_API_KEY"
+      });
+    }
+
+    // Fetch latest 3 candles
     const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(
       SYMBOL
     )}&interval=${INTERVAL}&outputsize=3&apikey=${process.env.TWELVEDATA_API_KEY}`;
@@ -44,63 +48,46 @@ export default async function handler(req, res) {
     if (!data.values) {
       return res.status(500).json({
         ok: false,
-        error: "Invalid response from TwelveData",
+        error: "Invalid TwelveData response",
         raw: data
       });
     }
 
-    const fetchedCandles = data.values.reverse(); // oldest → newest
+    const fetchedCandles = data.values.reverse();
 
-    // 📦 Load stored candles
     let storedCandles = await kv.get(CANDLES_KEY);
-    if (!storedCandles) {
-      storedCandles = [];
-    }
+    if (!storedCandles) storedCandles = [];
 
-    // 🧠 Merge without duplicates
-    const existingTimes = new Set(
-      storedCandles.map(c => c.datetime)
-    );
-
-    let newCount = 0;
+    const existingTimes = new Set(storedCandles.map(c => c.datetime));
 
     for (const candle of fetchedCandles) {
       if (!existingTimes.has(candle.datetime)) {
         storedCandles.push(candle);
-        newCount++;
       }
     }
 
-    // 📏 Trim to rolling window
     if (storedCandles.length > MAX_CANDLES) {
       storedCandles = storedCandles.slice(-MAX_CANDLES);
     }
 
-    // 💾 Save updated candles
     await kv.set(CANDLES_KEY, storedCandles);
 
-    // 🧠 Run trigger engine
-    const triggerResult = checkTriggers(storedCandles);
+    // 🔥 FORCE TEST TRIGGER
+    const triggerResult = {
+      triggered: true,
+      type: "test_big_body"
+    };
 
-    let aiResult = null;
+    const recentCandles = storedCandles.slice(-50);
 
-    if (triggerResult.triggered) {
-
-      // Send last 100 candles to AI
-      const recentCandles = storedCandles.slice(-100);
-
-      aiResult = await evaluateTrigger({
-        symbol: SYMBOL,
-        trigger: triggerResult.type,
-        candles: recentCandles
-      });
-    }
+    const aiResult = await evaluateTrigger({
+      symbol: SYMBOL,
+      trigger: triggerResult.type,
+      candles: recentCandles
+    });
 
     return res.status(200).json({
       ok: true,
-      fetched: fetchedCandles.length,
-      stored: storedCandles.length,
-      newCandles: newCount,
       trigger: triggerResult,
       ai: aiResult
     });
