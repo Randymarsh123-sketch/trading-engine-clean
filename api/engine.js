@@ -2,6 +2,7 @@ import { kv } from "@vercel/kv";
 import { checkTriggers } from "../lib/triggers.js";
 import { evaluateTrigger } from "../lib/ai.js";
 import { sendTelegram } from "../lib/telegram.js";
+import { detectSweepContext } from "../lib/context.js";
 
 const SYMBOL = "EUR/USD";
 const INTERVAL = "5min";
@@ -9,6 +10,7 @@ const MAX_CANDLES = 2000;
 const CANDLES_KEY = "eurusd:5m:candles";
 
 export default async function handler(req, res) {
+
   try {
 
     const now = new Date();
@@ -24,7 +26,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // Session filter (08-16 Norway)
+    // trading hours 08-16 norway (07-15 UTC)
     if (hour < 7 || hour > 15) {
       return res.status(200).json({
         ok: true,
@@ -77,28 +79,28 @@ export default async function handler(req, res) {
 
       const recentCandles = storedCandles.slice(-150);
 
+      const sweepContext = detectSweepContext(storedCandles);
+
       aiResult = await evaluateTrigger({
         symbol: SYMBOL,
         trigger: triggerResult.type,
+        sweepContext,
         candles: recentCandles
       });
 
       if (aiResult.valid) {
 
         await sendTelegram(
-`📊 EURUSD 5m
+`EURUSD 5m
 
 Trigger:
 ${triggerResult.type}
 
-AI Verdict:
-VALID
+AI Analysis:
+${aiResult.analysis}
 
 Confidence:
-${aiResult.confidence}%
-
-Reason:
-${aiResult.reason}`
+${aiResult.confidence}%`
         );
 
       }
@@ -118,4 +120,5 @@ ${aiResult.reason}`
     });
 
   }
+
 }
