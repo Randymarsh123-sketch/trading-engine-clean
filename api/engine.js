@@ -1,5 +1,3 @@
-// api/engine.js
-
 import { kv } from "@vercel/kv";
 import { checkTriggers } from "../lib/triggers.js";
 import { evaluateTrigger } from "../lib/ai.js";
@@ -15,25 +13,26 @@ export default async function handler(req, res) {
 
     const now = new Date();
     const minute = now.getUTCMinutes();
+    const hour = now.getUTCHours();
 
-    // 5m boundary guard
+    // 5m boundary
     if (minute % 5 !== 0) {
       return res.status(200).json({
         ok: true,
         skipped: true,
-        minute
+        reason: "Not 5m boundary"
       });
     }
 
-    if (!process.env.TWELVEDATA_API_KEY) {
-      return res.status(500).json({ ok: false, error: "Missing TWELVEDATA_API_KEY" });
+    // Session filter (08-16 Norway)
+    if (hour < 7 || hour > 15) {
+      return res.status(200).json({
+        ok: true,
+        skipped: true,
+        reason: "Outside trading session"
+      });
     }
 
-    if (!process.env.OPENAI_API_KEY) {
-      return res.status(500).json({ ok: false, error: "Missing OPENAI_API_KEY" });
-    }
-
-    // Fetch latest 3 candles
     const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(
       SYMBOL
     )}&interval=${INTERVAL}&outputsize=3&apikey=${process.env.TWELVEDATA_API_KEY}`;
@@ -42,7 +41,10 @@ export default async function handler(req, res) {
     const data = await response.json();
 
     if (!data.values) {
-      return res.status(500).json({ ok: false, error: "Invalid TwelveData response" });
+      return res.status(500).json({
+        ok: false,
+        error: "Invalid TwelveData response"
+      });
     }
 
     const fetchedCandles = data.values.reverse();
@@ -67,14 +69,13 @@ export default async function handler(req, res) {
 
     await kv.set(CANDLES_KEY, storedCandles);
 
-    // Run trigger engine
     const triggerResult = checkTriggers(storedCandles);
 
     let aiResult = null;
 
     if (triggerResult.triggered) {
 
-      const recentCandles = storedCandles.slice(-100);
+      const recentCandles = storedCandles.slice(-150);
 
       aiResult = await evaluateTrigger({
         symbol: SYMBOL,
@@ -82,29 +83,39 @@ export default async function handler(req, res) {
         candles: recentCandles
       });
 
-      // Send Telegram only if AI validates setup
       if (aiResult.valid) {
-        await sendTelegram(
-`📊 ${SYMBOL} Trigger: ${triggerResult.type}
 
-AI Verdict: VALID
-Confidence: ${aiResult.confidence}%
-Reason: ${aiResult.reason}`
+        await sendTelegram(
+`📊 EURUSD 5m
+
+Trigger:
+${triggerResult.type}
+
+AI Verdict:
+VALID
+
+Confidence:
+${aiResult.confidence}%
+
+Reason:
+${aiResult.reason}`
         );
+
       }
     }
 
     return res.status(200).json({
       ok: true,
-      fetched: fetchedCandles.length,
-      stored: storedCandles.length,
-      newCandles: newCount,
       trigger: triggerResult,
       ai: aiResult
     });
 
   } catch (error) {
-    console.error("Engine error:", error);
-    return res.status(500).json({ ok: false, error: error.message });
+
+    return res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+
   }
 }
