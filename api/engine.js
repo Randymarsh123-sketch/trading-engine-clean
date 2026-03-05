@@ -9,29 +9,42 @@ const INTERVAL = "5min";
 const MAX_CANDLES = 2000;
 const CANDLES_KEY = "eurusd:5m:candles";
 
-export default async function handler(req, res) {
+function withinTradingHours() {
+  const now = new Date();
 
+  const oslo = new Date(
+    now.toLocaleString("en-US", { timeZone: "Europe/Oslo" })
+  );
+
+  const h = oslo.getHours();
+  const m = oslo.getMinutes();
+
+  if (h < 8) return false;
+  if (h > 16) return false;
+  if (h === 16 && m > 15) return false;
+
+  return true;
+}
+
+export default async function handler(req, res) {
   try {
 
-    const now = new Date();
-    const minute = now.getUTCMinutes();
-    const hour = now.getUTCHours();
-
-    // 5m boundary
-    if (minute % 5 !== 0) {
-      return res.status(200).json({
+    if (!withinTradingHours()) {
+      return res.json({
         ok: true,
         skipped: true,
-        reason: "Not 5m boundary"
+        reason: "Outside trading hours"
       });
     }
 
-    // trading hours 08-16 norway (07-15 UTC)
-    if (hour < 7 || hour > 15) {
-      return res.status(200).json({
+    const now = new Date();
+    const minute = now.getUTCMinutes();
+
+    if (minute % 5 !== 0) {
+      return res.json({
         ok: true,
         skipped: true,
-        reason: "Outside trading session"
+        reason: "Not 5m boundary"
       });
     }
 
@@ -49,76 +62,65 @@ export default async function handler(req, res) {
       });
     }
 
-    const fetchedCandles = data.values.reverse();
+    const fetched = data.values.reverse();
 
-    let storedCandles = await kv.get(CANDLES_KEY);
-    if (!storedCandles) storedCandles = [];
+    let candles = await kv.get(CANDLES_KEY);
+    if (!candles) candles = [];
 
-    const existingTimes = new Set(storedCandles.map(c => c.datetime));
+    const existingTimes = new Set(candles.map(c => c.datetime));
 
-    let newCount = 0;
-
-    for (const candle of fetchedCandles) {
-      if (!existingTimes.has(candle.datetime)) {
-        storedCandles.push(candle);
-        newCount++;
+    for (const c of fetched) {
+      if (!existingTimes.has(c.datetime)) {
+        candles.push(c);
       }
     }
 
-    if (storedCandles.length > MAX_CANDLES) {
-      storedCandles = storedCandles.slice(-MAX_CANDLES);
+    if (candles.length > MAX_CANDLES) {
+      candles = candles.slice(-MAX_CANDLES);
     }
 
-    await kv.set(CANDLES_KEY, storedCandles);
+    await kv.set(CANDLES_KEY, candles);
 
-    const triggerResult = checkTriggers(storedCandles);
+    const trigger = checkTriggers(candles);
 
-    let aiResult = null;
-
-    if (triggerResult.triggered) {
-
-      const recentCandles = storedCandles.slice(-150);
-
-      const sweepContext = detectSweepContext(storedCandles);
-
-      aiResult = await evaluateTrigger({
-        symbol: SYMBOL,
-        trigger: triggerResult.type,
-        sweepContext,
-        candles: recentCandles
+    if (!trigger.triggered) {
+      return res.json({
+        ok: true,
+        trigger
       });
-
-      if (aiResult.valid) {
-
-        await sendTelegram(
-`EURUSD 5m
-
-Trigger:
-${triggerResult.type}
-
-AI Analysis:
-${aiResult.analysis}
-
-Confidence:
-${aiResult.confidence}%`
-        );
-
-      }
     }
 
-    return res.status(200).json({
-      ok: true,
-      trigger: triggerResult,
-      ai: aiResult
+    const context = detectSweepContext(candles);
+
+    const ai = await evaluateTrigger({
+      trigger,
+      context
     });
 
-  } catch (error) {
+    const w = trigger.wickCandle;
 
+    const message = `
+${trigger.name}
+
+${ai}
+
+Wick candle high: ${w.high}
+Wick candle open: ${w.open}
+Wick candle close: ${w.close}
+Wick candle low: ${w.low}
+`;
+
+    await sendTelegram(message);
+
+    return res.json({
+      ok: true,
+      trigger
+    });
+
+  } catch (err) {
     return res.status(500).json({
       ok: false,
-      error: error.message
+      error: err.message
     });
-
   }
-
 }
