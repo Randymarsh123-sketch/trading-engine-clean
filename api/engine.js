@@ -1,17 +1,16 @@
 import { kv } from "@vercel/kv";
 import { checkTriggers } from "../lib/triggers.js";
 import { evaluateTrigger } from "../lib/ai.js";
+import { detectContext } from "../lib/context.js";
 import { sendTelegram } from "../lib/telegram.js";
-import { detectSweepContext } from "../lib/context.js";
 
 const SYMBOL = "EUR/USD";
 const INTERVAL = "5min";
-const MAX_CANDLES = 2000;
 const CANDLES_KEY = "eurusd:5m:candles";
+const MAX_CANDLES = 2000;
 
 function withinTradingHours() {
   const now = new Date();
-
   const oslo = new Date(
     now.toLocaleString("en-US", { timeZone: "Europe/Oslo" })
   );
@@ -56,10 +55,7 @@ export default async function handler(req, res) {
     const data = await response.json();
 
     if (!data.values) {
-      return res.status(500).json({
-        ok: false,
-        error: "Invalid TwelveData response"
-      });
+      return res.status(500).json({ ok: false });
     }
 
     const fetched = data.values.reverse();
@@ -84,43 +80,18 @@ export default async function handler(req, res) {
     const trigger = checkTriggers(candles);
 
     if (!trigger.triggered) {
-      return res.json({
-        ok: true,
-        trigger
-      });
+      return res.json({ ok: true });
     }
 
-    const context = detectSweepContext(candles);
+    const context = detectContext(candles, trigger);
 
-    const ai = await evaluateTrigger({
-      trigger,
-      context
-    });
-
-    const w = trigger.wickCandle;
-
-    const message = `
-${trigger.name}
-
-${ai}
-
-Wick candle high: ${w.high}
-Wick candle open: ${w.open}
-Wick candle close: ${w.close}
-Wick candle low: ${w.low}
-`;
+    const message = evaluateTrigger(trigger, context);
 
     await sendTelegram(message);
 
-    return res.json({
-      ok: true,
-      trigger
-    });
+    return res.json({ ok: true });
 
   } catch (err) {
-    return res.status(500).json({
-      ok: false,
-      error: err.message
-    });
+    return res.status(500).json({ ok: false, error: err.message });
   }
 }
