@@ -8,9 +8,7 @@ const CANDLES_KEY = "eurusd:5m:candles";
 const MAX_CANDLES = 2000;
 
 function getOsloTime(date = new Date()) {
-  return new Date(
-    date.toLocaleString("en-US", { timeZone: "Europe/Oslo" })
-  );
+  return new Date(date.toLocaleString("en-US", { timeZone: "Europe/Oslo" }));
 }
 
 function formatDate(date) {
@@ -39,8 +37,9 @@ function mergeCandles(existing, incoming) {
   for (const c of existing) map.set(c.datetime, c);
   for (const c of incoming) map.set(c.datetime, c);
 
-  const merged = Array.from(map.values())
-    .sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
+  const merged = Array.from(map.values()).sort(
+    (a, b) => new Date(a.datetime) - new Date(b.datetime)
+  );
 
   return merged.slice(-MAX_CANDLES);
 }
@@ -48,7 +47,7 @@ function mergeCandles(existing, incoming) {
 function sliceCandlesAt(candles, cutoff) {
   const cutoffMs = cutoff.getTime();
 
-  return candles.filter(c => {
+  return candles.filter((c) => {
     const t = new Date(c.datetime + "Z").getTime();
     return t <= cutoffMs;
   });
@@ -57,7 +56,6 @@ function sliceCandlesAt(candles, cutoff) {
 export default async function handler(req, res) {
   try {
 
-    // --- FETCH & STORE CANDLES ---
     const fetched = await fetchCandles();
 
     let candles = await kv.get(CANDLES_KEY);
@@ -66,9 +64,7 @@ export default async function handler(req, res) {
     candles = mergeCandles(candles, fetched);
     await kv.set(CANDLES_KEY, candles);
 
-    // --- TELEGRAM TEST COMMAND ---
     if (req.body && req.body.message) {
-
       const text = req.body.message.text || "";
 
       if (text.startsWith("/test")) {
@@ -89,13 +85,11 @@ export default async function handler(req, res) {
         const oslo = new Date(Date.UTC(y, m - 1, d, hh - 1, mm));
 
         const sliced = sliceCandlesAt(candles, oslo);
-
         const dataset = sliced.slice(-500);
 
         const aiText = await runLondonAnalysis(dataset);
 
-        const msg =
-`TEST RUN
+        const msg = `TEST RUN
 
 EURUSD London Session Outlook ${date}
 (analysis simulated at ${time} CET)
@@ -108,12 +102,11 @@ ${aiText}`;
       }
     }
 
-    // --- DAILY LONDON ANALYSIS ---
     const now = getOsloTime();
     const h = now.getHours();
     const m = now.getMinutes();
 
-    if (h === 8 && m === 1) {
+    if (h === 8 && m >= 1 && m <= 3) {
 
       const dateStr = formatDate(now);
       const lockKey = `analysis_sent_${dateStr}`;
@@ -121,7 +114,7 @@ ${aiText}`;
       const already = await kv.get(lockKey);
 
       if (already) {
-        return res.json({ ok: true, skipped: "already_sent" });
+        return res.json({ ok: true });
       }
 
       const cutoff = new Date(now);
@@ -132,8 +125,7 @@ ${aiText}`;
 
       const aiText = await runLondonAnalysis(dataset);
 
-      const msg =
-`EURUSD London Session Outlook ${dateStr}
+      const msg = `EURUSD London Session Outlook ${dateStr}
 
 ${aiText}`;
 
@@ -141,7 +133,7 @@ ${aiText}`;
 
       await kv.set(lockKey, true);
 
-      return res.json({ ok: true, analysis: true });
+      return res.json({ ok: true });
     }
 
     return res.json({ ok: true });
