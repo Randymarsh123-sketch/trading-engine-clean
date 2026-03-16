@@ -10,9 +10,9 @@ const ASIA_START_UTC = 1;
 const ASIA_END_UTC = 6;
 
 function formatDate(date) {
-  const d = String(date.getDate()).padStart(2, "0");
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const y = date.getFullYear();
+  const d = String(date.getUTCDate()).padStart(2, "0");
+  const m = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const y = date.getUTCFullYear();
   return `${d}.${m}.${y}`;
 }
 
@@ -107,6 +107,13 @@ function calculateAsiaStats(asia) {
   };
 }
 
+function isWeekend(dateUTC) {
+
+  const day = dateUTC.getUTCDay();
+
+  return day === 0 || day === 6;
+}
+
 export default async function handler(req, res) {
 
   try {
@@ -120,6 +127,8 @@ export default async function handler(req, res) {
       candles = mergeCandles(candles, fetched);
       await kv.set(CANDLES_KEY, candles);
     }
+
+    // TELEGRAM TEST
 
     if (req.body && req.body.message) {
 
@@ -140,9 +149,19 @@ export default async function handler(req, res) {
         const [hh, mm] = time.split(":");
         const [d, m, y] = date.split(".");
 
-        const testTime = new Date(Date.UTC(y, m - 1, d, hh - 1, mm));
+        const testUTC = new Date(Date.UTC(y, m - 1, d, hh - 1, mm));
 
-        const sliced = sliceCandlesAt(candles, testTime);
+        if (isWeekend(testUTC)) {
+
+          await sendTelegram(`TEST RUN
+
+${date} is weekend.
+FX market closed.`);
+
+          return res.json({ ok: true });
+        }
+
+        const sliced = sliceCandlesAt(candles, testUTC);
 
         const targetDateUTC = new Date(Date.UTC(y, m - 1, d));
 
@@ -151,9 +170,13 @@ export default async function handler(req, res) {
         const stats = calculateAsiaStats(asia);
 
         if (!stats) {
+
           await sendTelegram("No Asia data found.");
           return res.json({ ok: true });
         }
+
+        const firstCandle = asia[0].datetime;
+        const lastCandle = asia[asia.length - 1].datetime;
 
         const msg = `TEST RUN
 
@@ -165,6 +188,11 @@ Asia Open: ${stats.open}
 Asia High: ${stats.high}
 Asia Low: ${stats.low}
 Asia Close: ${stats.close}
+
+Asia Candle Count: ${asia.length}
+
+First Asia Candle: ${firstCandle}
+Last Asia Candle: ${lastCandle}
 `;
 
         await sendTelegram(msg);
@@ -175,12 +203,11 @@ Asia Close: ${stats.close}
 
     const now = new Date();
 
-    const day = now.getUTCDay();
-    const hour = now.getUTCHours();
-
-    if (day === 0 || day === 6) {
+    if (isWeekend(now)) {
       return res.json({ ok: true });
     }
+
+    const hour = now.getUTCHours();
 
     if (hour === 7) {
 
@@ -202,6 +229,9 @@ Asia Close: ${stats.close}
 
       if (!stats) return res.json({ ok: true });
 
+      const firstCandle = asia[0].datetime;
+      const lastCandle = asia[asia.length - 1].datetime;
+
       const msg = `EURUSD London Session Outlook ${dateStr}
 
 Asia Range: ${stats.rangePips} pips
@@ -210,6 +240,11 @@ Asia Open: ${stats.open}
 Asia High: ${stats.high}
 Asia Low: ${stats.low}
 Asia Close: ${stats.close}
+
+Asia Candle Count: ${asia.length}
+
+First Asia Candle: ${firstCandle}
+Last Asia Candle: ${lastCandle}
 `;
 
       await sendTelegram(msg);
