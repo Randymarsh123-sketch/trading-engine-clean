@@ -21,15 +21,12 @@ async function fetchCandles() {
 
   const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(
     SYMBOL
-  )}&interval=${INTERVAL}&outputsize=10&apikey=${process.env.TWELVEDATA_API_KEY}`;
+  )}&interval=${INTERVAL}&outputsize=20&apikey=${process.env.TWELVEDATA_API_KEY}`;
 
   const response = await fetch(url);
   const data = await response.json();
 
-  if (!data.values) {
-    console.error("TwelveData error", data);
-    return [];
-  }
+  if (!data.values) return [];
 
   return data.values.reverse();
 }
@@ -129,7 +126,7 @@ export default async function handler(req, res) {
       await kv.set(CANDLES_KEY, candles);
     }
 
-    // -------- TELEGRAM TEST --------
+    // TELEGRAM TEST
 
     if (req.body && req.body.message) {
 
@@ -183,8 +180,6 @@ Asia Close: ${stats.close}
       }
     }
 
-    // -------- NORMAL DAILY RUN --------
-
     const now = getOsloTime();
     const h = now.getHours();
     const m = now.getMinutes();
@@ -201,9 +196,7 @@ Asia Close: ${stats.close}
 
       const already = await kv.get(lockKey);
 
-      if (already) {
-        return res.json({ ok: true });
-      }
+      if (already) return res.json({ ok: true });
 
       const cutoff = new Date(now);
       cutoff.setHours(8, 0, 0, 0);
@@ -214,9 +207,7 @@ Asia Close: ${stats.close}
 
       const stats = calculateAsiaStats(asia);
 
-      if (!stats) {
-        return res.json({ ok: true });
-      }
+      if (!stats) return res.json({ ok: true });
 
       const msg = `EURUSD London Session Outlook ${dateStr}
 
