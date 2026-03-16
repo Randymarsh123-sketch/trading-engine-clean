@@ -20,7 +20,7 @@ async function fetchCandles() {
 
   const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(
     SYMBOL
-  )}&interval=${INTERVAL}&outputsize=20&apikey=${process.env.TWELVEDATA_API_KEY}`;
+  )}&interval=${INTERVAL}&outputsize=1000&apikey=${process.env.TWELVEDATA_API_KEY}`;
 
   const response = await fetch(url);
   const data = await response.json();
