@@ -7,8 +7,8 @@ const CANDLES_KEY = "eurusd:5m:candles";
 const MAX_CANDLES = 2000;
 
 // midlertidig session for debugging
-const ASIA_START_UTC = 0;
-const ASIA_END_UTC = 5;
+const ASIA_START_UTC = 1;
+const ASIA_END_UTC = 6;
 
 function formatDate(date) {
   const d = String(date.getUTCDate()).padStart(2, "0");
