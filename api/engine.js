@@ -26,7 +26,10 @@ async function fetchCandles() {
   const response = await fetch(url);
   const data = await response.json();
 
-  if (!data.values) throw new Error("TwelveData fetch failed");
+  if (!data.values) {
+    console.error("TwelveData error", data);
+    return [];
+  }
 
   return data.values.reverse();
 }
@@ -56,15 +59,20 @@ function sliceCandlesAt(candles, cutoff) {
 export default async function handler(req, res) {
   try {
 
-    const fetched = await fetchCandles();
-
+    // ---------- FETCH DATA ----------
     let candles = await kv.get(CANDLES_KEY);
     if (!candles) candles = [];
 
-    candles = mergeCandles(candles, fetched);
-    await kv.set(CANDLES_KEY, candles);
+    const fetched = await fetchCandles();
 
+    if (fetched.length > 0) {
+      candles = mergeCandles(candles, fetched);
+      await kv.set(CANDLES_KEY, candles);
+    }
+
+    // ---------- TELEGRAM TEST ----------
     if (req.body && req.body.message) {
+
       const text = req.body.message.text || "";
 
       if (text.startsWith("/test")) {
@@ -82,12 +90,18 @@ export default async function handler(req, res) {
         const [hh, mm] = time.split(":");
         const [d, m, y] = date.split(".");
 
-        const oslo = new Date(Date.UTC(y, m - 1, d, hh - 1, mm));
+        const testTime = new Date(`${y}-${m}-${d}T${hh}:${mm}:00+01:00`);
 
-        const sliced = sliceCandlesAt(candles, oslo);
+        const sliced = sliceCandlesAt(candles, testTime);
         const dataset = sliced.slice(-500);
 
-        const aiText = await runLondonAnalysis(dataset);
+        let aiText = "AI analysis failed";
+
+        try {
+          aiText = await runLondonAnalysis(dataset);
+        } catch (err) {
+          console.error("AI error during test", err);
+        }
 
         const msg = `TEST RUN
 
@@ -102,10 +116,18 @@ ${aiText}`;
       }
     }
 
+    // ---------- TIME ----------
     const now = getOsloTime();
     const h = now.getHours();
     const m = now.getMinutes();
+    const day = now.getDay();
 
+    // ---------- SKIP WEEKENDS ----------
+    if (day === 0 || day === 6) {
+      return res.json({ ok: true, skipped: "weekend" });
+    }
+
+    // ---------- LONDON ANALYSIS ----------
     if (h === 8 && m >= 1 && m <= 3) {
 
       const dateStr = formatDate(now);
@@ -114,7 +136,7 @@ ${aiText}`;
       const already = await kv.get(lockKey);
 
       if (already) {
-        return res.json({ ok: true });
+        return res.json({ ok: true, skipped: "already_sent" });
       }
 
       const cutoff = new Date(now);
@@ -123,7 +145,13 @@ ${aiText}`;
       const sliced = sliceCandlesAt(candles, cutoff);
       const dataset = sliced.slice(-500);
 
-      const aiText = await runLondonAnalysis(dataset);
+      let aiText = "AI analysis failed";
+
+      try {
+        aiText = await runLondonAnalysis(dataset);
+      } catch (err) {
+        console.error("AI error", err);
+      }
 
       const msg = `EURUSD London Session Outlook ${dateStr}
 
@@ -133,13 +161,17 @@ ${aiText}`;
 
       await kv.set(lockKey, true);
 
-      return res.json({ ok: true });
+      return res.json({ ok: true, analysis: true });
     }
 
     return res.json({ ok: true });
 
   } catch (err) {
-    return res.status(500).json({
+
+    console.error("ENGINE ERROR", err);
+
+    // CRITICAL: aldri returner 500 til cron
+    return res.json({
       ok: false,
       error: err.message
     });
