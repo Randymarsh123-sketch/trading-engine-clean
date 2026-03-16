@@ -5,7 +5,7 @@ const API_KEY = process.env.TWELVEDATA_API_KEY
 // Asia session in UTC
 // Oslo 02:00–07:00 = UTC 01:00–06:00
 const ASIA_START_UTC = 1
-const ASIA_END_UTC = 6
+const ASIA_END_UTC = 5
 
 async function getCandles() {
 
