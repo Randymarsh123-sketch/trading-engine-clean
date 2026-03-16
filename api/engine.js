@@ -6,14 +6,20 @@ const INTERVAL = "5min";
 const CANDLES_KEY = "eurusd:5m:candles";
 const MAX_CANDLES = 2000;
 
-const ASIA_START_UTC = 1;
-const ASIA_END_UTC = 6;
+// Asia session used by your chart
+const ASIA_START_UTC = 0;
+const ASIA_END_UTC = 5;
 
 function formatDate(date) {
   const d = String(date.getUTCDate()).padStart(2, "0");
   const m = String(date.getUTCMonth() + 1).padStart(2, "0");
   const y = date.getUTCFullYear();
   return `${d}.${m}.${y}`;
+}
+
+function isWeekend(date) {
+  const day = date.getUTCDay();
+  return day === 0 || day === 6;
 }
 
 async function fetchCandles() {
@@ -107,13 +113,6 @@ function calculateAsiaStats(asia) {
   };
 }
 
-function isWeekend(dateUTC) {
-
-  const day = dateUTC.getUTCDay();
-
-  return day === 0 || day === 6;
-}
-
 export default async function handler(req, res) {
 
   try {
@@ -128,7 +127,7 @@ export default async function handler(req, res) {
       await kv.set(CANDLES_KEY, candles);
     }
 
-    // TELEGRAM TEST
+    // TELEGRAM TEST COMMAND
 
     if (req.body && req.body.message) {
 
