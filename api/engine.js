@@ -6,7 +6,7 @@ const INTERVAL = "5min";
 const CANDLES_KEY = "eurusd:5m:candles";
 const MAX_CANDLES = 2000;
 
-// Asia session used by your chart
+// midlertidig session for debugging
 const ASIA_START_UTC = 0;
 const ASIA_END_UTC = 5;
 
@@ -127,7 +127,7 @@ export default async function handler(req, res) {
       await kv.set(CANDLES_KEY, candles);
     }
 
-    // TELEGRAM TEST COMMAND
+    // TELEGRAM TEST
 
     if (req.body && req.body.message) {
 
@@ -174,8 +174,11 @@ FX market closed.`);
           return res.json({ ok: true });
         }
 
-        const firstCandle = asia[0].datetime;
-        const lastCandle = asia[asia.length - 1].datetime;
+        let debug = "\nAsia candles:\n";
+
+        for (const c of asia) {
+          debug += `${c.datetime} O:${c.open} H:${c.high} L:${c.low} C:${c.close}\n`;
+        }
 
         const msg = `TEST RUN
 
@@ -190,67 +193,16 @@ Asia Close: ${stats.close}
 
 Asia Candle Count: ${asia.length}
 
-First Asia Candle: ${firstCandle}
-Last Asia Candle: ${lastCandle}
+First Asia Candle: ${asia[0].datetime}
+Last Asia Candle: ${asia[asia.length - 1].datetime}
+
+${debug}
 `;
 
         await sendTelegram(msg);
 
         return res.json({ ok: true });
       }
-    }
-
-    const now = new Date();
-
-    if (isWeekend(now)) {
-      return res.json({ ok: true });
-    }
-
-    const hour = now.getUTCHours();
-
-    if (hour === 7) {
-
-      const dateStr = formatDate(now);
-      const lockKey = `analysis_sent_${dateStr}`;
-
-      const already = await kv.get(lockKey);
-
-      if (already) return res.json({ ok: true });
-
-      const cutoff = new Date();
-      cutoff.setUTCHours(7, 0, 0, 0);
-
-      const sliced = sliceCandlesAt(candles, cutoff);
-
-      const asia = getAsiaSession(sliced, now);
-
-      const stats = calculateAsiaStats(asia);
-
-      if (!stats) return res.json({ ok: true });
-
-      const firstCandle = asia[0].datetime;
-      const lastCandle = asia[asia.length - 1].datetime;
-
-      const msg = `EURUSD London Session Outlook ${dateStr}
-
-Asia Range: ${stats.rangePips} pips
-
-Asia Open: ${stats.open}
-Asia High: ${stats.high}
-Asia Low: ${stats.low}
-Asia Close: ${stats.close}
-
-Asia Candle Count: ${asia.length}
-
-First Asia Candle: ${firstCandle}
-Last Asia Candle: ${lastCandle}
-`;
-
-      await sendTelegram(msg);
-
-      await kv.set(lockKey, true);
-
-      return res.json({ ok: true });
     }
 
     return res.json({ ok: true });
