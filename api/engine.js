@@ -1,5 +1,4 @@
 import { kv } from "@vercel/kv";
-import { runLondonAnalysis } from "../lib/ai.js";
 import { sendTelegram } from "../lib/telegram.js";
 
 const SYMBOL = "EUR/USD";
@@ -19,6 +18,7 @@ function formatDate(date) {
 }
 
 async function fetchCandles() {
+
   const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(
     SYMBOL
   )}&interval=${INTERVAL}&outputsize=5&apikey=${process.env.TWELVEDATA_API_KEY}`;
@@ -35,6 +35,7 @@ async function fetchCandles() {
 }
 
 function mergeCandles(existing, incoming) {
+
   const map = new Map();
 
   for (const c of existing) map.set(c.datetime, c);
@@ -48,18 +49,70 @@ function mergeCandles(existing, incoming) {
 }
 
 function sliceCandlesAt(candles, cutoff) {
+
   const cutoffMs = cutoff.getTime();
 
-  return candles.filter((c) => {
+  return candles.filter(c => {
     const t = new Date(c.datetime + "Z").getTime();
     return t <= cutoffMs;
   });
 }
 
+function getAsiaSession(candles) {
+
+  const asia = [];
+
+  for (const c of candles) {
+
+    const d = new Date(c.datetime + "Z");
+    const oslo = new Date(
+      d.toLocaleString("en-US", { timeZone: "Europe/Oslo" })
+    );
+
+    const h = oslo.getHours();
+
+    if (h >= 2 && h < 7) {
+      asia.push(c);
+    }
+  }
+
+  return asia;
+}
+
+function calculateAsiaStats(asia) {
+
+  if (asia.length === 0) return null;
+
+  const open = parseFloat(asia[0].open);
+  const close = parseFloat(asia[asia.length - 1].close);
+
+  let high = -Infinity;
+  let low = Infinity;
+
+  for (const c of asia) {
+
+    const h = parseFloat(c.high);
+    const l = parseFloat(c.low);
+
+    if (h > high) high = h;
+    if (l < low) low = l;
+  }
+
+  const rangePips = ((high - low) * 10000).toFixed(1);
+
+  return {
+    open,
+    high,
+    low,
+    close,
+    rangePips
+  };
+}
+
 export default async function handler(req, res) {
+
   try {
 
-    // ---------- FETCH DATA ----------
     let candles = await kv.get(CANDLES_KEY);
     if (!candles) candles = [];
 
@@ -70,7 +123,8 @@ export default async function handler(req, res) {
       await kv.set(CANDLES_KEY, candles);
     }
 
-    // ---------- TELEGRAM TEST ----------
+    // -------- TELEGRAM TEST --------
+
     if (req.body && req.body.message) {
 
       const text = req.body.message.text || "";
@@ -93,22 +147,26 @@ export default async function handler(req, res) {
         const testTime = new Date(`${y}-${m}-${d}T${hh}:${mm}:00+01:00`);
 
         const sliced = sliceCandlesAt(candles, testTime);
-        const dataset = sliced.slice(-500);
 
-        let aiText = "AI analysis failed";
+        const asia = getAsiaSession(sliced);
+        const stats = calculateAsiaStats(asia);
 
-        try {
-          aiText = await runLondonAnalysis(dataset);
-        } catch (err) {
-          console.error("AI error during test", err);
+        if (!stats) {
+          await sendTelegram("No Asia data found.");
+          return res.json({ ok: true });
         }
 
         const msg = `TEST RUN
 
 EURUSD London Session Outlook ${date}
-(analysis simulated at ${time} CET)
 
-${aiText}`;
+Asia Range: ${stats.rangePips} pips
+
+Asia Open: ${stats.open}
+Asia High: ${stats.high}
+Asia Low: ${stats.low}
+Asia Close: ${stats.close}
+`;
 
         await sendTelegram(msg);
 
@@ -116,18 +174,17 @@ ${aiText}`;
       }
     }
 
-    // ---------- TIME ----------
+    // -------- NORMAL DAILY RUN --------
+
     const now = getOsloTime();
     const h = now.getHours();
     const m = now.getMinutes();
     const day = now.getDay();
 
-    // ---------- SKIP WEEKENDS ----------
     if (day === 0 || day === 6) {
-      return res.json({ ok: true, skipped: "weekend" });
+      return res.json({ ok: true });
     }
 
-    // ---------- LONDON ANALYSIS ----------
     if (h === 8 && m >= 1 && m <= 3) {
 
       const dateStr = formatDate(now);
@@ -136,32 +193,36 @@ ${aiText}`;
       const already = await kv.get(lockKey);
 
       if (already) {
-        return res.json({ ok: true, skipped: "already_sent" });
+        return res.json({ ok: true });
       }
 
       const cutoff = new Date(now);
       cutoff.setHours(8, 0, 0, 0);
 
       const sliced = sliceCandlesAt(candles, cutoff);
-      const dataset = sliced.slice(-500);
 
-      let aiText = "AI analysis failed";
+      const asia = getAsiaSession(sliced);
+      const stats = calculateAsiaStats(asia);
 
-      try {
-        aiText = await runLondonAnalysis(dataset);
-      } catch (err) {
-        console.error("AI error", err);
+      if (!stats) {
+        return res.json({ ok: true });
       }
 
       const msg = `EURUSD London Session Outlook ${dateStr}
 
-${aiText}`;
+Asia Range: ${stats.rangePips} pips
+
+Asia Open: ${stats.open}
+Asia High: ${stats.high}
+Asia Low: ${stats.low}
+Asia Close: ${stats.close}
+`;
 
       await sendTelegram(msg);
 
       await kv.set(lockKey, true);
 
-      return res.json({ ok: true, analysis: true });
+      return res.json({ ok: true });
     }
 
     return res.json({ ok: true });
@@ -170,7 +231,6 @@ ${aiText}`;
 
     console.error("ENGINE ERROR", err);
 
-    // CRITICAL: aldri returner 500 til cron
     return res.json({
       ok: false,
       error: err.message
