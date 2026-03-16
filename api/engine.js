@@ -6,9 +6,8 @@ const INTERVAL = "5min";
 const CANDLES_KEY = "eurusd:5m:candles";
 const MAX_CANDLES = 2000;
 
-function getOsloTime(date = new Date()) {
-  return new Date(date.toLocaleString("en-US", { timeZone: "Europe/Oslo" }));
-}
+const ASIA_START_UTC = 1;
+const ASIA_END_UTC = 6;
 
 function formatDate(date) {
   const d = String(date.getDate()).padStart(2, "0");
@@ -55,7 +54,7 @@ function sliceCandlesAt(candles, cutoff) {
   });
 }
 
-function getAsiaSession(candles, targetDate) {
+function getAsiaSession(candles, targetDateUTC) {
 
   const asia = [];
 
@@ -63,18 +62,14 @@ function getAsiaSession(candles, targetDate) {
 
     const utc = new Date(c.datetime + "Z");
 
-    const oslo = new Date(
-      utc.toLocaleString("en-US", { timeZone: "Europe/Oslo" })
-    );
-
     const sameDay =
-      oslo.getFullYear() === targetDate.getFullYear() &&
-      oslo.getMonth() === targetDate.getMonth() &&
-      oslo.getDate() === targetDate.getDate();
+      utc.getUTCFullYear() === targetDateUTC.getUTCFullYear() &&
+      utc.getUTCMonth() === targetDateUTC.getUTCMonth() &&
+      utc.getUTCDate() === targetDateUTC.getUTCDate();
 
-    const hour = oslo.getHours();
+    const hour = utc.getUTCHours();
 
-    if (sameDay && hour >= 2 && hour < 7) {
+    if (sameDay && hour >= ASIA_START_UTC && hour < ASIA_END_UTC) {
       asia.push(c);
     }
   }
@@ -126,8 +121,6 @@ export default async function handler(req, res) {
       await kv.set(CANDLES_KEY, candles);
     }
 
-    // TELEGRAM TEST
-
     if (req.body && req.body.message) {
 
       const text = req.body.message.text || "";
@@ -147,13 +140,13 @@ export default async function handler(req, res) {
         const [hh, mm] = time.split(":");
         const [d, m, y] = date.split(".");
 
-        const testTime = new Date(`${y}-${m}-${d}T${hh}:${mm}:00+01:00`);
+        const testTime = new Date(Date.UTC(y, m - 1, d, hh - 1, mm));
 
         const sliced = sliceCandlesAt(candles, testTime);
 
-        const targetDate = new Date(`${y}-${m}-${d}`);
+        const targetDateUTC = new Date(Date.UTC(y, m - 1, d));
 
-        const asia = getAsiaSession(sliced, targetDate);
+        const asia = getAsiaSession(sliced, targetDateUTC);
 
         const stats = calculateAsiaStats(asia);
 
@@ -180,16 +173,16 @@ Asia Close: ${stats.close}
       }
     }
 
-    const now = getOsloTime();
-    const h = now.getHours();
-    const m = now.getMinutes();
-    const day = now.getDay();
+    const now = new Date();
+
+    const day = now.getUTCDay();
+    const hour = now.getUTCHours();
 
     if (day === 0 || day === 6) {
       return res.json({ ok: true });
     }
 
-    if (h === 8 && m >= 1 && m <= 3) {
+    if (hour === 7) {
 
       const dateStr = formatDate(now);
       const lockKey = `analysis_sent_${dateStr}`;
@@ -198,8 +191,8 @@ Asia Close: ${stats.close}
 
       if (already) return res.json({ ok: true });
 
-      const cutoff = new Date(now);
-      cutoff.setHours(8, 0, 0, 0);
+      const cutoff = new Date();
+      cutoff.setUTCHours(7, 0, 0, 0);
 
       const sliced = sliceCandlesAt(candles, cutoff);
 
