@@ -21,7 +21,7 @@ async function fetchCandles() {
 
   const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(
     SYMBOL
-  )}&interval=${INTERVAL}&outputsize=5&apikey=${process.env.TWELVEDATA_API_KEY}`;
+  )}&interval=${INTERVAL}&outputsize=10&apikey=${process.env.TWELVEDATA_API_KEY}`;
 
   const response = await fetch(url);
   const data = await response.json();
@@ -58,20 +58,26 @@ function sliceCandlesAt(candles, cutoff) {
   });
 }
 
-function getAsiaSession(candles) {
+function getAsiaSession(candles, targetDate) {
 
   const asia = [];
 
   for (const c of candles) {
 
-    const d = new Date(c.datetime + "Z");
+    const utc = new Date(c.datetime + "Z");
+
     const oslo = new Date(
-      d.toLocaleString("en-US", { timeZone: "Europe/Oslo" })
+      utc.toLocaleString("en-US", { timeZone: "Europe/Oslo" })
     );
 
-    const h = oslo.getHours();
+    const sameDay =
+      oslo.getFullYear() === targetDate.getFullYear() &&
+      oslo.getMonth() === targetDate.getMonth() &&
+      oslo.getDate() === targetDate.getDate();
 
-    if (h >= 2 && h < 7) {
+    const hour = oslo.getHours();
+
+    if (sameDay && hour >= 2 && hour < 7) {
       asia.push(c);
     }
   }
@@ -148,7 +154,10 @@ export default async function handler(req, res) {
 
         const sliced = sliceCandlesAt(candles, testTime);
 
-        const asia = getAsiaSession(sliced);
+        const targetDate = new Date(`${y}-${m}-${d}`);
+
+        const asia = getAsiaSession(sliced, targetDate);
+
         const stats = calculateAsiaStats(asia);
 
         if (!stats) {
@@ -201,7 +210,8 @@ Asia Close: ${stats.close}
 
       const sliced = sliceCandlesAt(candles, cutoff);
 
-      const asia = getAsiaSession(sliced);
+      const asia = getAsiaSession(sliced, now);
+
       const stats = calculateAsiaStats(asia);
 
       if (!stats) {
