@@ -2,7 +2,6 @@ import { sendTelegram } from "../lib/telegram.js"
 
 const API_KEY = process.env.TWELVEDATA_API_KEY
 
-// Asia session i UTC (IKKE endre dette)
 const ASIA_START_UTC = 1
 const ASIA_END_UTC = 6
 
@@ -26,7 +25,7 @@ async function getCandles() {
       return []
     }
 
-    return data.values.reverse() // oldest → newest
+    return data.values.reverse()
 
   } catch (err) {
     console.error("Fetch failed:", err)
@@ -126,12 +125,16 @@ export default async function handler(req, res) {
 
   try {
 
-    // ❌ STOPP HELG
-    const now = new Date()
-    const day = now.getUTCDay()
+    const isTest = typeof req.query.days !== "undefined"
 
-    if (day === 0 || day === 6) {
-      return res.status(200).json({ ok:true })
+    // ❌ STOPP HELG (kun live, ikke test)
+    if (!isTest) {
+      const now = new Date()
+      const day = now.getUTCDay()
+
+      if (day === 0 || day === 6) {
+        return res.status(200).json({ ok:true })
+      }
     }
 
     const candles = await getCandles()
@@ -141,7 +144,6 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok:true })
     }
 
-    // ✅ TEST BACK I TID
     const daysBack = parseInt(req.query.days || "0")
 
     const baseDate = new Date()
@@ -198,6 +200,6 @@ ${debug}`
 
     await sendTelegram(`❌ Engine crashed: ${err.message}`)
 
-    res.status(200).json({ ok:true }) // aldri 500
+    res.status(200).json({ ok:true })
   }
 }
