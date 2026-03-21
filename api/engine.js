@@ -2,8 +2,8 @@ export default async function handler(req, res) {
 
   const TELEGRAM_URL = `https://api.telegram.org/bot8662614781:AAEWm8XxLymsUMtu54Z6ERkqKO3SP4448Xk/sendMessage`
 
-  function send(msg) {
-    return fetch(TELEGRAM_URL, {
+  async function send(msg) {
+    await fetch(TELEGRAM_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -56,6 +56,8 @@ export default async function handler(req, res) {
 
     for (const c of candles) {
 
+      if (!c.datetime) continue
+
       const d = new Date(c.datetime)
 
       const y = d.getUTCFullYear()
@@ -84,19 +86,35 @@ export default async function handler(req, res) {
     let low = Infinity
 
     for (const c of asia) {
+
       const h = parseFloat(c.high)
       const l = parseFloat(c.low)
+
+      if (isNaN(h) || isNaN(l)) {
+        await send(`❌ NaN detected in candle`)
+        continue
+      }
 
       if (h > high) high = h
       if (l < low) low = l
     }
 
-    const open = asia[0].open
-    const close = asia[asia.length - 1].close
+    if (high === -Infinity || low === Infinity) {
+      await send("❌ Failed to calculate high/low")
+      return res.status(200).json({ ok:true })
+    }
+
+    const open = parseFloat(asia[0].open)
+    const close = parseFloat(asia[asia.length - 1].close)
+
+    if (isNaN(open) || isNaN(close)) {
+      await send("❌ Open/Close invalid")
+      return res.status(200).json({ ok:true })
+    }
 
     const range = ((high - low) * 10000).toFixed(1)
 
-    let debug = `\n\nCandles:\n\n`
+    let debug = `\nCandles:\n\n`
 
     for (const c of asia) {
 
@@ -116,7 +134,7 @@ O:${c.open} H:${c.high} L:${c.low} C:${c.close}
     }
 
     const msg =
-`TEST
+`✅ FINAL OUTPUT
 
 Date: ${targetDate}
 
