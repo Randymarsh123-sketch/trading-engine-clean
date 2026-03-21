@@ -2,10 +2,9 @@ import { sendTelegram } from "../lib/telegram.js"
 
 const API_KEY = process.env.TWELVEDATA_API_KEY
 
-// Asia session in UTC
-// Oslo 02:00–07:00 = UTC 01:00–06:00
+// Asia session i UTC (IKKE endre dette)
 const ASIA_START_UTC = 1
-const ASIA_END_UTC = 5
+const ASIA_END_UTC = 6
 
 async function getCandles() {
 
@@ -13,18 +12,26 @@ async function getCandles() {
     `https://api.twelvedata.com/time_series` +
     `?symbol=EUR/USD` +
     `&interval=5min` +
-    `&outputsize=500` +
+    `&outputsize=1000` +
+    `&timezone=UTC` +
     `&apikey=${API_KEY}`
 
-  const res = await fetch(url)
-  const data = await res.json()
+  try {
 
-  if (!data.values) {
-    throw new Error("No candle data returned")
+    const res = await fetch(url)
+    const data = await res.json()
+
+    if (!data.values) {
+      console.error("TwelveData error:", data)
+      return []
+    }
+
+    return data.values.reverse() // oldest → newest
+
+  } catch (err) {
+    console.error("Fetch failed:", err)
+    return []
   }
-
-  // oldest → newest
-  return data.values.reverse()
 }
 
 function getAsiaCandles(candles, targetDate) {
@@ -33,7 +40,7 @@ function getAsiaCandles(candles, targetDate) {
 
   for (const c of candles) {
 
-    const d = new Date(c.datetime + "Z")
+    const d = new Date(c.datetime)
 
     const year = d.getUTCFullYear()
     const month = String(d.getUTCMonth() + 1).padStart(2,"0")
@@ -70,7 +77,7 @@ function calcStats(asia) {
   const open = parseFloat(asia[0].open)
   const close = parseFloat(asia[asia.length - 1].close)
 
-  const range = (high - low)
+  const range = high - low
   const rangePips = (range * 10000).toFixed(1)
 
   return {
@@ -84,10 +91,23 @@ function calcStats(asia) {
 
 function buildDebug(asia) {
 
-  let out = "\nAsia candles:\n"
+  let out = "\nAsia candles:\n\n"
 
   for (const c of asia) {
-    out += `${c.datetime} O:${c.open} H:${c.high} L:${c.low} C:${c.close}\n`
+
+    const utc = new Date(c.datetime)
+
+    const oslo = new Date(
+      utc.toLocaleString("en-US", { timeZone: "Europe/Oslo" })
+    )
+
+    out +=
+`${c.datetime}
+UTC:   ${utc.toISOString()}
+OSLO:  ${oslo.toISOString()}
+O:${c.open} H:${c.high} L:${c.low} C:${c.close}
+
+`
   }
 
   return out
@@ -106,37 +126,37 @@ export default async function handler(req, res) {
 
   try {
 
+    // ❌ STOPP HELG
+    const now = new Date()
+    const day = now.getUTCDay()
+
+    if (day === 0 || day === 6) {
+      return res.status(200).json({ ok:true })
+    }
+
     const candles = await getCandles()
 
-    let testMode = false
-    let targetDate
-
-    if (req.query.test) {
-
-      testMode = true
-
-      const parts = req.query.test.split("-")
-      targetDate = `${parts[0]}-${parts[1]}-${parts[2]}`
-
-    } else {
-
-      const now = new Date()
-
-      const year = now.getUTCFullYear()
-      const month = String(now.getUTCMonth()+1).padStart(2,"0")
-      const day = String(now.getUTCDate()).padStart(2,"0")
-
-      targetDate = `${year}-${month}-${day}`
+    if (!candles || candles.length === 0) {
+      await sendTelegram("❌ No candle data returned")
+      return res.status(200).json({ ok:true })
     }
+
+    // ✅ TEST BACK I TID
+    const daysBack = parseInt(req.query.days || "0")
+
+    const baseDate = new Date()
+    baseDate.setUTCDate(baseDate.getUTCDate() - daysBack)
+
+    const year = baseDate.getUTCFullYear()
+    const month = String(baseDate.getUTCMonth()+1).padStart(2,"0")
+    const dayStr = String(baseDate.getUTCDate()).padStart(2,"0")
+
+    const targetDate = `${year}-${month}-${dayStr}`
 
     const asia = getAsiaCandles(candles, targetDate)
 
     if (asia.length === 0) {
-
-      if (testMode) {
-        await sendTelegram("No Asia data found.")
-      }
-
+      await sendTelegram(`❌ No Asia candles found for ${targetDate}`)
       return res.status(200).json({ ok:true })
     }
 
@@ -152,32 +172,32 @@ export default async function handler(req, res) {
     const msg =
 `TEST RUN
 
-EURUSD London Session Outlook ${dateStr}
+EURUSD Asia Session ${dateStr}
 
-Asia Range: ${stats.rangePips} pips
+Range: ${stats.rangePips} pips
 
-Asia Open: ${stats.open}
-Asia High: ${stats.high}
-Asia Low: ${stats.low}
-Asia Close: ${stats.close}
+Open: ${stats.open}
+High: ${stats.high}
+Low: ${stats.low}
+Close: ${stats.close}
 
-Asia Candle Count: ${asia.length}
+Candles: ${asia.length}
 
-First Asia Candle: ${first}
-Last Asia Candle: ${last}
+First: ${first}
+Last: ${last}
 
 ${debug}`
 
-    if (testMode) {
-      await sendTelegram(msg)
-    }
+    await sendTelegram(msg)
 
     res.status(200).json({ ok:true })
 
   } catch (err) {
 
-    console.error(err)
+    console.error("ENGINE ERROR:", err)
 
-    res.status(500).json({ error: err.message })
+    await sendTelegram(`❌ Engine crashed: ${err.message}`)
+
+    res.status(200).json({ ok:true }) // aldri 500
   }
 }
