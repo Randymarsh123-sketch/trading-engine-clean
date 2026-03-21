@@ -4,6 +4,14 @@ export default async function handler(req, res) {
 
   try {
 
+    // ❌ stopp helg
+    const now = new Date()
+    const day = now.getUTCDay()
+
+    if (day === 0 || day === 6) {
+      return res.status(200).json({ ok: true })
+    }
+
     const API_KEY = process.env.TWELVEDATA_API_KEY
 
     const url =
@@ -24,33 +32,14 @@ export default async function handler(req, res) {
 
     const candles = data.values.reverse()
 
-    // 🔥 TEST MODE
-    let targetDate
+    // 👉 dagens dato (UTC anchor)
+    const baseDate = new Date()
 
-    if (req.query.test) {
+    const year = baseDate.getUTCFullYear()
+    const month = String(baseDate.getUTCMonth()+1).padStart(2,"0")
+    const dayStr = String(baseDate.getUTCDate()).padStart(2,"0")
 
-      // format: 2026-03-20
-      const parts = req.query.test.split("-")
-      targetDate = `${parts[0]}-${parts[1]}-${parts[2]}`
-
-    } else {
-
-      // ❌ stopp helg kun live
-      const now = new Date()
-      const day = now.getUTCDay()
-
-      if (day === 0 || day === 6) {
-        return res.status(200).json({ ok: true })
-      }
-
-      const baseDate = new Date()
-
-      const year = baseDate.getUTCFullYear()
-      const month = String(baseDate.getUTCMonth()+1).padStart(2,"0")
-      const dayStr = String(baseDate.getUTCDate()).padStart(2,"0")
-
-      targetDate = `${year}-${month}-${dayStr}`
-    }
+    const targetDate = `${year}-${month}-${dayStr}`
 
     let high = -Infinity
     let low = Infinity
@@ -74,6 +63,7 @@ export default async function handler(req, res) {
 
       const hour = oslo.getHours()
 
+      // 👉 Asia session: 02:00–06:59 Oslo
       if (hour >= 2 && hour < 7) {
 
         const h = parseFloat(c.high)
@@ -98,11 +88,11 @@ export default async function handler(req, res) {
 
 Date: ${targetDate}
 
+Session: 02:00–07:00 (Oslo)
+
 High: ${high}
 Low: ${low}
-Range: ${rangePips} pips
-
-Candles: ${count}`
+Range: ${rangePips} pips`
 
     await sendTelegram(msg)
 
