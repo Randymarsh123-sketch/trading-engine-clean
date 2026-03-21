@@ -31,7 +31,7 @@ export default async function handler(req, res) {
     const data = await resApi.json()
 
     if (!data.values) {
-      await send("❌ No data")
+      await send("❌ No data from API")
       return res.status(200).json({ ok:true })
     }
 
@@ -48,9 +48,10 @@ export default async function handler(req, res) {
 
     const targetDate = `${year}-${month}-${day}`
 
-    const targets = [2, 3, 4, 5] // Oslo hours
+    let high = -Infinity
+    let low = Infinity
 
-    let msg = `CHECK vs TradingView\n\nDate: ${targetDate}\n\n`
+    let count = 0
 
     for (const c of candles) {
 
@@ -69,21 +70,38 @@ export default async function handler(req, res) {
       if (dateStr !== targetDate) continue
 
       const hour = oslo.getHours()
-      const min = oslo.getMinutes()
 
-      // kun eksakt 00-min candles
-      if (!targets.includes(hour) || min !== 0) continue
+      // 👉 Asia: 02:00–06:59 Oslo
+      if (hour >= 2 && hour < 7) {
 
-      msg +=
-`${hour}:00 OSLO
+        const h = parseFloat(c.high)
+        const l = parseFloat(c.low)
 
-O: ${c.open}
-H: ${c.high}
-L: ${c.low}
-C: ${c.close}
+        if (h > high) high = h
+        if (l < low) low = l
 
-`
+        count++
+      }
     }
+
+    if (count === 0) {
+      await send(`❌ No Asia candles for ${targetDate}`)
+      return res.status(200).json({ ok:true })
+    }
+
+    const rangePips = ((high - low) * 10000).toFixed(1)
+
+    const msg =
+`ASIA RANGE TEST
+
+Date: ${targetDate}
+
+High: ${high}
+Low: ${low}
+
+Range: ${rangePips} pips
+
+Candles counted: ${count}`
 
     await send(msg)
 
