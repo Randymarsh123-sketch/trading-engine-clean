@@ -1,19 +1,6 @@
+import { sendTelegram } from "../lib/telegram.js"
+
 export default async function handler(req, res) {
-
-  const TELEGRAM_URL = `https://api.telegram.org/bot8662614781:AAEWm8XxLymsUMtu54Z6ERkqKO3SP4448Xk/sendMessage`
-
-  async function send(msg) {
-    await fetch(TELEGRAM_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        chat_id: "8263696819",
-        text: msg
-      })
-    })
-  }
 
   try {
 
@@ -31,26 +18,42 @@ export default async function handler(req, res) {
     const data = await resApi.json()
 
     if (!data.values) {
-      await send("❌ No data from API")
-      return res.status(200).json({ ok:true })
+      await sendTelegram("❌ No data from TwelveData")
+      return res.status(200).json({ ok: true })
     }
 
     const candles = data.values.reverse()
 
-    const daysBack = parseInt(req.query.days || "0")
+    // 🔥 TEST MODE
+    let targetDate
 
-    const baseDate = new Date()
-    baseDate.setUTCDate(baseDate.getUTCDate() - daysBack)
+    if (req.query.test) {
 
-    const year = baseDate.getUTCFullYear()
-    const month = String(baseDate.getUTCMonth()+1).padStart(2,"0")
-    const day = String(baseDate.getUTCDate()).padStart(2,"0")
+      // format: 2026-03-20
+      const parts = req.query.test.split("-")
+      targetDate = `${parts[0]}-${parts[1]}-${parts[2]}`
 
-    const targetDate = `${year}-${month}-${day}`
+    } else {
+
+      // ❌ stopp helg kun live
+      const now = new Date()
+      const day = now.getUTCDay()
+
+      if (day === 0 || day === 6) {
+        return res.status(200).json({ ok: true })
+      }
+
+      const baseDate = new Date()
+
+      const year = baseDate.getUTCFullYear()
+      const month = String(baseDate.getUTCMonth()+1).padStart(2,"0")
+      const dayStr = String(baseDate.getUTCDate()).padStart(2,"0")
+
+      targetDate = `${year}-${month}-${dayStr}`
+    }
 
     let high = -Infinity
     let low = Infinity
-
     let count = 0
 
     for (const c of candles) {
@@ -71,7 +74,6 @@ export default async function handler(req, res) {
 
       const hour = oslo.getHours()
 
-      // 👉 Asia: 02:00–06:59 Oslo
       if (hour >= 2 && hour < 7) {
 
         const h = parseFloat(c.high)
@@ -85,41 +87,33 @@ export default async function handler(req, res) {
     }
 
     if (count === 0) {
-      await send(`❌ No Asia candles for ${targetDate}`)
-      return res.status(200).json({ ok:true })
+      await sendTelegram(`❌ No Asia candles for ${targetDate}`)
+      return res.status(200).json({ ok: true })
     }
 
     const rangePips = ((high - low) * 10000).toFixed(1)
 
     const msg =
-`ASIA RANGE TEST
+`EURUSD Asia Session
 
 Date: ${targetDate}
 
 High: ${high}
 Low: ${low}
-
 Range: ${rangePips} pips
 
-Candles counted: ${count}`
+Candles: ${count}`
 
-    await send(msg)
+    await sendTelegram(msg)
 
-    return res.status(200).json({ ok:true })
+    return res.status(200).json({ ok: true })
 
   } catch (err) {
 
-    await fetch(`https://api.telegram.org/bot8662614781:AAEWm8XxLymsUMtu54Z6ERkqKO3SP4448Xk/sendMessage`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        chat_id: "8263696819",
-        text: `❌ ERROR: ${err.message}`
-      })
-    })
+    console.error(err)
 
-    return res.status(200).json({ ok:true })
+    await sendTelegram(`❌ Engine error: ${err.message}`)
+
+    return res.status(200).json({ ok: true })
   }
 }
