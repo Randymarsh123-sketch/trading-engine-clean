@@ -4,15 +4,20 @@ export default async function handler(req, res) {
 
   try {
 
-    // ❌ stopp helg
-    const now = new Date()
-    const day = now.getUTCDay()
-
-    if (day === 0 || day === 6) {
-      return res.status(200).json({ ok: true })
-    }
-
     const API_KEY = process.env.TWELVEDATA_API_KEY
+
+    // 🔥 TEST MODE
+    const isTest = typeof req.query.test !== "undefined"
+
+    // ❌ stopp helg KUN hvis ikke test
+    if (!isTest) {
+      const now = new Date()
+      const day = now.getUTCDay()
+
+      if (day === 0 || day === 6) {
+        return res.status(200).json({ ok: true })
+      }
+    }
 
     const url =
       `https://api.twelvedata.com/time_series` +
@@ -32,14 +37,24 @@ export default async function handler(req, res) {
 
     const candles = data.values.reverse()
 
-    // 👉 dagens dato (UTC anchor)
-    const baseDate = new Date()
+    let targetDate
 
-    const year = baseDate.getUTCFullYear()
-    const month = String(baseDate.getUTCMonth()+1).padStart(2,"0")
-    const dayStr = String(baseDate.getUTCDate()).padStart(2,"0")
+    if (isTest) {
 
-    const targetDate = `${year}-${month}-${dayStr}`
+      // 👉 format: ?test=2026-03-20
+      const parts = req.query.test.split("-")
+      targetDate = `${parts[0]}-${parts[1]}-${parts[2]}`
+
+    } else {
+
+      const baseDate = new Date()
+
+      const year = baseDate.getUTCFullYear()
+      const month = String(baseDate.getUTCMonth()+1).padStart(2,"0")
+      const dayStr = String(baseDate.getUTCDate()).padStart(2,"0")
+
+      targetDate = `${year}-${month}-${dayStr}`
+    }
 
     let high = -Infinity
     let low = Infinity
@@ -83,8 +98,10 @@ export default async function handler(req, res) {
 
     const rangePips = ((high - low) * 10000).toFixed(1)
 
+    const mode = isTest ? "TEST MODE" : "LIVE"
+
     const msg =
-`EURUSD Asia Session
+`EURUSD Asia Session (${mode})
 
 Date: ${targetDate}
 
