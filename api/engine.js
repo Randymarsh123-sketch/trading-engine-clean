@@ -3,7 +3,7 @@ import { sendTelegram } from "../lib/telegram.js"
 const API_KEY = process.env.TWELVEDATA_API_KEY
 
 const ASIA_START_UTC = 1
-const ASIA_END_UTC = 6
+const ASIA_END_UTC = 6 
 
 async function getCandles() {
 
