@@ -1,12 +1,11 @@
 import { sendTelegram } from "../lib/telegram.js"
-import { RULES } from "../lib/londonRules.js"
 
 export default async function handler(req, res) {
 
   try {
 
     const isTest = typeof req.query.test !== "undefined"
-    const mode = req.query.mode || "0805" // default = 08 alert
+    const mode = req.query.mode || "0805"
 
     const now = new Date()
 
@@ -25,16 +24,9 @@ export default async function handler(req, res) {
       }
     }
 
-    // =====================
-    // TIME GATING (live)
-    // =====================
-
+    // ⏰ TIME GATING
     if (!isTest) {
-      if (hour === 8 && minute === 5) {
-        // run 08 alert
-      } else if (hour === 9 && minute === 20) {
-        // run 09:20 alert
-      } else {
+      if (!(hour === 8 && minute === 5) && !(hour === 9 && minute === 20)) {
         return res.status(200).json({ ok: true })
       }
     }
@@ -63,17 +55,13 @@ export default async function handler(req, res) {
     // DATE
     // =====================
 
-    let targetDate
-
-    if (isTest) {
-      targetDate = req.query.test
-    } else {
+    let targetDate = isTest ? req.query.test : (() => {
       const d = new Date()
       const y = d.getUTCFullYear()
       const m = String(d.getUTCMonth()+1).padStart(2,"0")
       const da = String(d.getUTCDate()).padStart(2,"0")
-      targetDate = `${y}-${m}-${da}`
-    }
+      return `${y}-${m}-${da}`
+    })()
 
     // =====================
     // ASIA RANGE
@@ -93,9 +81,7 @@ export default async function handler(req, res) {
       const m = String(oslo.getMonth()+1).padStart(2,"0")
       const d = String(oslo.getDate()).padStart(2,"0")
 
-      const dateStr = `${y}-${m}-${d}`
-
-      if (dateStr !== targetDate) continue
+      if (`${y}-${m}-${d}` !== targetDate) continue
 
       const h = oslo.getHours()
 
@@ -108,61 +94,34 @@ export default async function handler(req, res) {
       }
     }
 
-    if (asiaHigh === -Infinity) {
-      await sendTelegram("❌ No Asia data")
-      return res.status(200).json({ ok: true })
-    }
-
-    const rangePips = (asiaHigh - asiaLow) * 10000
-
     // =====================
-    // 08:05 ALERT
+    // 08:05 ALERT (unchanged)
     // =====================
 
     if (mode === "0805") {
-
-      let scoreHigh = RULES.SCORING.earlyTiming
-      let scoreLow = RULES.SCORING.earlyTiming
-
-      function getConviction(score) {
-        if (score >= 6) return "HIGH"
-        if (score >= 3) return "MEDIUM"
-        return "LOW"
-      }
 
       const msg =
 `LONDON OUTLOOK
 
 Date: ${targetDate}
 
-Asia Range: ${rangePips.toFixed(1)} pips
-Session: 02:00–07:00 (Oslo)
-
-EDGE FOUND (Base model)
+Asia Range: ${((asiaHigh - asiaLow) * 10000).toFixed(1)} pips
 
 Scenario 1
 
 IF London sweeps ASIA HIGH FIRST
 → Expect move DOWN
 
-Conviction: ${getConviction(scoreHigh)}
-
 Scenario 2
 
 IF London sweeps ASIA LOW FIRST
-→ Expect move UP
-
-Conviction: ${getConviction(scoreLow)}
-
-Notes:
-- First sweep defines bias
-- Base winrate ~75–81% (15p)`
+→ Expect move UP`
 
       await sendTelegram(msg)
     }
 
     // =====================
-    // 09:20 ALERT
+    // 09:20 ALERT (FULL PROMPT STRUCTURE)
     // =====================
 
     if (mode === "0920") {
@@ -181,29 +140,25 @@ Notes:
         const m = String(oslo.getMonth()+1).padStart(2,"0")
         const d = String(oslo.getDate()).padStart(2,"0")
 
-        const dateStr = `${y}-${m}-${d}`
-
-        if (dateStr !== targetDate) continue
+        if (`${y}-${m}-${d}` !== targetDate) continue
 
         const h = oslo.getHours()
         const min = oslo.getMinutes()
 
-        // only London window
+        // 08:00–09:20 window
         if (h < 8 || (h === 9 && min > 20) || h > 9) continue
 
         const high = parseFloat(c.high)
         const low = parseFloat(c.low)
         const close = parseFloat(c.close)
 
-        // sweep high
         if (!firstSweep && high > asiaHigh && close <= asiaHigh) {
-          firstSweep = "ASIA HIGH"
+          firstSweep = "Asia high"
           sweepTime = `${h}:${String(min).padStart(2,"0")}`
         }
 
-        // sweep low
         if (!firstSweep && low < asiaLow && close >= asiaLow) {
-          firstSweep = "ASIA LOW"
+          firstSweep = "Asia low"
           sweepTime = `${h}:${String(min).padStart(2,"0")}`
         }
       }
@@ -212,8 +167,7 @@ Notes:
 
       if (firstSweep) {
 
-        const direction =
-          firstSweep === "ASIA HIGH" ? "DOWN" : "UP"
+        const direction = firstSweep.includes("high") ? "lower" : "higher"
 
         msg =
 `London Update
@@ -225,11 +179,21 @@ Type: ${firstSweep}
 Time of sweep: ${sweepTime}
 
 Direction:
-IF sweep ${firstSweep.includes("HIGH") ? "high" : "low"} → expect move ${direction}
+If sweep ${firstSweep.includes("high") ? "high" : "low"} → expect move ${direction}
 
-Conviction: MEDIUM
+Context:
+Asia direction: Not available (v1)
+Previous day direction: Not available (v1)
+Late Asia behavior: Not available (v1)
 
-Final:
+Alignment:
+Mixed
+
+Conviction:
+MEDIUM
+
+Final line:
+
 Wait for LIT setup`
 
       } else {
@@ -246,7 +210,11 @@ Most sweeps occur before 09:15
 
 If sweep occurs later → reduced probability
 
-Final:
+Context:
+Not available (v1)
+
+Final line:
+
 Wait for first sweep
 or LIT setup if no clear move develops`
       }
@@ -259,6 +227,7 @@ or LIT setup if no clear move develops`
   } catch (err) {
 
     console.error(err)
+
     await sendTelegram(`❌ Engine error: ${err.message}`)
 
     return res.status(200).json({ ok: true })
