@@ -16,7 +16,7 @@ export default async function handler(req, res) {
     const hour = osloNow.getHours()
     const minute = osloNow.getMinutes()
 
-    // ❌ stopp helg (kun live)
+    // ❌ stopp helg
     if (!isTest) {
       const day = osloNow.getDay()
       if (day === 0 || day === 6) {
@@ -64,7 +64,7 @@ export default async function handler(req, res) {
     })()
 
     // =====================
-    // ASIA DATA
+    // ASIA
     // =====================
 
     let asiaHigh = -Infinity
@@ -99,12 +99,10 @@ export default async function handler(req, res) {
     const range = (asiaHigh - asiaLow) * 10000
     const mid = (asiaHigh + asiaLow) / 2
 
-    // range type
     let rangeType = "SMALL"
     if (range >= 15) rangeType = "VALID"
     if (range >= 25) rangeType = "LARGE"
 
-    // Asia trend
     const asiaOpen = parseFloat(asiaCandles[0]?.open || 0)
     const asiaClose = parseFloat(asiaCandles[asiaCandles.length-1]?.close || 0)
     const asiaDir = asiaClose > asiaOpen ? "UP" : "DOWN"
@@ -138,10 +136,19 @@ export default async function handler(req, res) {
 
     if (mode === "0805") {
 
-      let edge = "NO EDGE"
+      let modelText = "NO CLEAR EDGE"
 
-      if (hasCluster && range >= 15) {
-        edge = "MID CLUSTER EDGE"
+      if (range >= 15 && hasCluster) {
+        modelText =
+`PRIMARY MODEL (HIGH PROBABILITY)
+
+IF London sweeps MID CLUSTER first
+→ expect CONTINUATION in Asia direction (${asiaDir})
+
+SECONDARY MODEL
+
+IF London sweeps ASIA HIGH/LOW first
+→ expect REVERSAL`
       }
 
       const msg =
@@ -149,25 +156,18 @@ export default async function handler(req, res) {
 
 Date: ${targetDate}
 
-Asia Range: ${range.toFixed(1)} pips
-Range Type: ${rangeType}
-
+Asia Range: ${range.toFixed(1)} pips (${rangeType})
 Asia Direction: ${asiaDir}
 
 Mid Cluster: ${hasCluster ? "YES" : "NO"} (${cluster.length})
 
-EDGE:
-${edge}
+MODEL:
 
-Scenario 1
+${modelText}
 
-IF London sweeps ASIA HIGH FIRST
-→ Expect move DOWN
-
-Scenario 2
-
-IF London sweeps ASIA LOW FIRST
-→ Expect move UP`
+NOTES:
+- 09:00–09:15 = highest probability window
+- Range <15 = avoid`
 
       await sendTelegram(msg)
     }
@@ -180,7 +180,8 @@ IF London sweeps ASIA LOW FIRST
 
       let firstSweep = null
       let sweepTime = null
-      let conviction = "NONE"
+      let modelUsed = null
+      let conviction = "LOW"
 
       for (const c of candles) {
 
@@ -204,12 +205,13 @@ IF London sweeps ASIA LOW FIRST
         const low = parseFloat(c.low)
         const close = parseFloat(c.close)
 
-        // 🔥 MID CLUSTER FIRST
+        // MID FIRST
         if (!firstSweep && hasCluster) {
 
           if (asiaDir === "UP") {
             if (low < clusterLow && close >= clusterLow) {
               firstSweep = "MID LOW"
+              modelUsed = "CONTINUATION"
               sweepTime = `${h}:${String(min).padStart(2,"0")}`
             }
           }
@@ -217,21 +219,24 @@ IF London sweeps ASIA LOW FIRST
           if (asiaDir === "DOWN") {
             if (high > clusterHigh && close <= clusterHigh) {
               firstSweep = "MID HIGH"
+              modelUsed = "CONTINUATION"
               sweepTime = `${h}:${String(min).padStart(2,"0")}`
             }
           }
         }
 
-        // 🔁 FALLBACK TO ASIA
+        // ASIA FALLBACK
         if (!firstSweep) {
 
           if (high > asiaHigh && close <= asiaHigh) {
             firstSweep = "ASIA HIGH"
+            modelUsed = "REVERSAL"
             sweepTime = `${h}:${String(min).padStart(2,"0")}`
           }
 
           if (low < asiaLow && close >= asiaLow) {
             firstSweep = "ASIA LOW"
+            modelUsed = "REVERSAL"
             sweepTime = `${h}:${String(min).padStart(2,"0")}`
           }
         }
@@ -243,16 +248,10 @@ IF London sweeps ASIA LOW FIRST
 
       if (firstSweep) {
 
-        const isEarly = sweepTime && (
-          parseInt(sweepTime.split(":")[0]) === 9 &&
-          parseInt(sweepTime.split(":")[1]) <= 15
-        )
+        const [h, m] = sweepTime.split(":").map(Number)
+        const early = h === 9 && m <= 15
 
-        if (
-          firstSweep.includes("MID") &&
-          range >= 15 &&
-          isEarly
-        ) {
+        if (modelUsed === "CONTINUATION" && early && range >= 15) {
           conviction = "HIGH"
         }
         else if (range >= 15) {
@@ -271,9 +270,15 @@ IF London sweeps ASIA LOW FIRST
 
       if (firstSweep) {
 
-        const direction = firstSweep.includes("HIGH")
-          ? "lower"
-          : "higher"
+        let direction = "UNKNOWN"
+
+        if (modelUsed === "REVERSAL") {
+          direction = firstSweep.includes("HIGH") ? "DOWN" : "UP"
+        }
+
+        if (modelUsed === "CONTINUATION") {
+          direction = asiaDir
+        }
 
         msg =
 `London Update
@@ -281,21 +286,21 @@ IF London sweeps ASIA LOW FIRST
 First sweep confirmed
 
 Type: ${firstSweep}
+Model: ${modelUsed}
 
-Time of sweep: ${sweepTime}
+Time: ${sweepTime}
 
-Direction:
-If sweep ${firstSweep.includes("HIGH") ? "high" : "low"} → expect move ${direction}
+Expected Move:
+${direction}
 
 Context:
-Asia direction: ${asiaDir}
+Asia Direction: ${asiaDir}
 Range: ${range.toFixed(1)} pips
 
 Conviction:
 ${conviction}
 
-Final line:
-
+Final:
 Wait for LIT setup`
 
       } else {
@@ -303,16 +308,17 @@ Wait for LIT setup`
         msg =
 `London Update
 
-No valid sweep detected yet
+No sweep yet
 
-No active edge
+Bias:
+Await first liquidity sweep
 
 Context:
 Range: ${range.toFixed(1)} pips
+Asia Direction: ${asiaDir}
 
-Final line:
-
-Wait for first sweep`
+Final:
+Wait for setup`
       }
 
       await sendTelegram(msg)
