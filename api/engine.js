@@ -6,12 +6,35 @@ export default async function handler(req, res) {
   try {
 
     const isTest = typeof req.query.test !== "undefined"
+    const mode = req.query.mode || "0805" // default = 08 alert
+
+    const now = new Date()
+
+    const osloNow = new Date(
+      now.toLocaleString("en-US", { timeZone: "Europe/Oslo" })
+    )
+
+    const hour = osloNow.getHours()
+    const minute = osloNow.getMinutes()
 
     // ❌ stopp helg kun live
     if (!isTest) {
-      const now = new Date()
-      const day = now.getUTCDay()
+      const day = osloNow.getDay()
       if (day === 0 || day === 6) {
+        return res.status(200).json({ ok: true })
+      }
+    }
+
+    // =====================
+    // TIME GATING (live)
+    // =====================
+
+    if (!isTest) {
+      if (hour === 8 && minute === 5) {
+        // run 08 alert
+      } else if (hour === 9 && minute === 20) {
+        // run 09:20 alert
+      } else {
         return res.status(200).json({ ok: true })
       }
     }
@@ -36,11 +59,14 @@ export default async function handler(req, res) {
 
     const candles = data.values.reverse()
 
+    // =====================
+    // DATE
+    // =====================
+
     let targetDate
 
     if (isTest) {
-      const parts = req.query.test.split("-")
-      targetDate = `${parts[0]}-${parts[1]}-${parts[2]}`
+      targetDate = req.query.test
     } else {
       const d = new Date()
       const y = d.getUTCFullYear()
@@ -53,8 +79,8 @@ export default async function handler(req, res) {
     // ASIA RANGE
     // =====================
 
-    let high = -Infinity
-    let low = Infinity
+    let asiaHigh = -Infinity
+    let asiaLow = Infinity
 
     for (const c of candles) {
 
@@ -71,68 +97,40 @@ export default async function handler(req, res) {
 
       if (dateStr !== targetDate) continue
 
-      const hour = oslo.getHours()
+      const h = oslo.getHours()
 
-      if (hour >= 2 && hour < 7) {
-        const h = parseFloat(c.high)
-        const l = parseFloat(c.low)
+      if (h >= 2 && h < 7) {
+        const hi = parseFloat(c.high)
+        const lo = parseFloat(c.low)
 
-        if (h > high) high = h
-        if (l < low) low = l
+        if (hi > asiaHigh) asiaHigh = hi
+        if (lo < asiaLow) asiaLow = lo
       }
     }
 
-    if (high === -Infinity) {
-      await sendTelegram(`❌ No Asia data for ${targetDate}`)
+    if (asiaHigh === -Infinity) {
+      await sendTelegram("❌ No Asia data")
       return res.status(200).json({ ok: true })
     }
 
-    const rangePips = ((high - low) * 10000)
+    const rangePips = (asiaHigh - asiaLow) * 10000
 
     // =====================
-    // RANGE CLASSIFICATION
+    // 08:05 ALERT
     // =====================
 
-    let rangeType = "medium"
+    if (mode === "0805") {
 
-    if (rangePips <= 15) rangeType = "small"
-    else if (rangePips >= 25) rangeType = "large"
+      let scoreHigh = RULES.SCORING.earlyTiming
+      let scoreLow = RULES.SCORING.earlyTiming
 
-    // =====================
-    // SCORING (simple v1)
-    // =====================
+      function getConviction(score) {
+        if (score >= 6) return "HIGH"
+        if (score >= 3) return "MEDIUM"
+        return "LOW"
+      }
 
-    let scoreHigh = 0
-    let scoreLow = 0
-
-    // Early timing (always true kl 08)
-    scoreHigh += RULES.SCORING.earlyTiming
-    scoreLow += RULES.SCORING.earlyTiming
-
-    // Range
-    if (rangeType === "small") {
-      scoreHigh += RULES.SCORING.smallRange
-      scoreLow += RULES.SCORING.smallRange
-    }
-
-    // =====================
-    // CONVICTION
-    // =====================
-
-    function getConviction(score) {
-      if (score >= RULES.CONVICTION.high.min) return "HIGH"
-      if (score >= RULES.CONVICTION.medium.min) return "MEDIUM"
-      return "LOW"
-    }
-
-    const convHigh = getConviction(scoreHigh)
-    const convLow = getConviction(scoreLow)
-
-    // =====================
-    // MESSAGE
-    // =====================
-
-    const msg =
+      const msg =
 `LONDON OUTLOOK
 
 Date: ${targetDate}
@@ -147,25 +145,114 @@ Scenario 1
 IF London sweeps ASIA HIGH FIRST
 → Expect move DOWN
 
-Type: Asia High
-Timing: Early (${RULES.TIMING.early.label})
-Conviction: ${convHigh}
+Conviction: ${getConviction(scoreHigh)}
 
 Scenario 2
 
 IF London sweeps ASIA LOW FIRST
 → Expect move UP
 
-Type: Asia Low
-Timing: Early (${RULES.TIMING.early.label})
-Conviction: ${convLow}
+Conviction: ${getConviction(scoreLow)}
 
 Notes:
-- Base edge winrate ~75–81% (15p)
-- First sweep is trigger
-- Internal liquidity not included (v1)`
+- First sweep defines bias
+- Base winrate ~75–81% (15p)`
 
-    await sendTelegram(msg)
+      await sendTelegram(msg)
+    }
+
+    // =====================
+    // 09:20 ALERT
+    // =====================
+
+    if (mode === "0920") {
+
+      let firstSweep = null
+      let sweepTime = null
+
+      for (const c of candles) {
+
+        const utc = new Date(c.datetime)
+        const oslo = new Date(
+          utc.toLocaleString("en-US", { timeZone: "Europe/Oslo" })
+        )
+
+        const y = oslo.getFullYear()
+        const m = String(oslo.getMonth()+1).padStart(2,"0")
+        const d = String(oslo.getDate()).padStart(2,"0")
+
+        const dateStr = `${y}-${m}-${d}`
+
+        if (dateStr !== targetDate) continue
+
+        const h = oslo.getHours()
+        const min = oslo.getMinutes()
+
+        // only London window
+        if (h < 8 || (h === 9 && min > 20) || h > 9) continue
+
+        const high = parseFloat(c.high)
+        const low = parseFloat(c.low)
+        const close = parseFloat(c.close)
+
+        // sweep high
+        if (!firstSweep && high > asiaHigh && close <= asiaHigh) {
+          firstSweep = "ASIA HIGH"
+          sweepTime = `${h}:${String(min).padStart(2,"0")}`
+        }
+
+        // sweep low
+        if (!firstSweep && low < asiaLow && close >= asiaLow) {
+          firstSweep = "ASIA LOW"
+          sweepTime = `${h}:${String(min).padStart(2,"0")}`
+        }
+      }
+
+      let msg
+
+      if (firstSweep) {
+
+        const direction =
+          firstSweep === "ASIA HIGH" ? "DOWN" : "UP"
+
+        msg =
+`London Update
+
+First sweep confirmed
+
+Type: ${firstSweep}
+
+Time of sweep: ${sweepTime}
+
+Direction:
+IF sweep ${firstSweep.includes("HIGH") ? "high" : "low"} → expect move ${direction}
+
+Conviction: MEDIUM
+
+Final:
+Wait for LIT setup`
+
+      } else {
+
+        msg =
+`London Update
+
+No valid sweep detected yet
+
+No active edge
+
+Timing note:
+Most sweeps occur before 09:15
+
+If sweep occurs later → reduced probability
+
+Final:
+Wait for first sweep
+or LIT setup if no clear move develops`
+      }
+
+      await sendTelegram(msg)
+    }
 
     return res.status(200).json({ ok: true })
 
