@@ -16,7 +16,7 @@ export default async function handler(req, res) {
     const hour = osloNow.getHours()
     const minute = osloNow.getMinutes()
 
-    // ❌ stopp helg kun live
+    // ❌ stopp helg (kun live)
     if (!isTest) {
       const day = osloNow.getDay()
       if (day === 0 || day === 6) {
@@ -45,7 +45,7 @@ export default async function handler(req, res) {
     const data = await resApi.json()
 
     if (!data.values) {
-      await sendTelegram("❌ No data from TwelveData")
+      await sendTelegram("❌ No data")
       return res.status(200).json({ ok: true })
     }
 
@@ -64,11 +64,12 @@ export default async function handler(req, res) {
     })()
 
     // =====================
-    // ASIA RANGE
+    // ASIA DATA
     // =====================
 
     let asiaHigh = -Infinity
     let asiaLow = Infinity
+    let asiaCandles = []
 
     for (const c of candles) {
 
@@ -86,6 +87,7 @@ export default async function handler(req, res) {
       const h = oslo.getHours()
 
       if (h >= 2 && h < 7) {
+        asiaCandles.push({ ...c, oslo })
         const hi = parseFloat(c.high)
         const lo = parseFloat(c.low)
 
@@ -94,18 +96,68 @@ export default async function handler(req, res) {
       }
     }
 
+    const range = (asiaHigh - asiaLow) * 10000
+    const mid = (asiaHigh + asiaLow) / 2
+
+    // range type
+    let rangeType = "SMALL"
+    if (range >= 15) rangeType = "VALID"
+    if (range >= 25) rangeType = "LARGE"
+
+    // Asia trend
+    const asiaOpen = parseFloat(asiaCandles[0]?.open || 0)
+    const asiaClose = parseFloat(asiaCandles[asiaCandles.length-1]?.close || 0)
+    const asiaDir = asiaClose > asiaOpen ? "UP" : "DOWN"
+
     // =====================
-    // 08:05 ALERT (unchanged)
+    // MID CLUSTER
+    // =====================
+
+    const zoneSize = (asiaHigh - asiaLow) * 0.10
+    const zoneHigh = mid + zoneSize
+    const zoneLow = mid - zoneSize
+
+    const cluster = asiaCandles.filter(c =>
+      parseFloat(c.high) >= zoneLow &&
+      parseFloat(c.low) <= zoneHigh
+    )
+
+    const hasCluster = cluster.length >= 6
+
+    const clusterHigh = hasCluster
+      ? Math.max(...cluster.map(c => parseFloat(c.high)))
+      : null
+
+    const clusterLow = hasCluster
+      ? Math.min(...cluster.map(c => parseFloat(c.low)))
+      : null
+
+    // =====================
+    // 08:05 ALERT
     // =====================
 
     if (mode === "0805") {
+
+      let edge = "NO EDGE"
+
+      if (hasCluster && range >= 15) {
+        edge = "MID CLUSTER EDGE"
+      }
 
       const msg =
 `LONDON OUTLOOK
 
 Date: ${targetDate}
 
-Asia Range: ${((asiaHigh - asiaLow) * 10000).toFixed(1)} pips
+Asia Range: ${range.toFixed(1)} pips
+Range Type: ${rangeType}
+
+Asia Direction: ${asiaDir}
+
+Mid Cluster: ${hasCluster ? "YES" : "NO"} (${cluster.length})
+
+EDGE:
+${edge}
 
 Scenario 1
 
@@ -121,13 +173,14 @@ IF London sweeps ASIA LOW FIRST
     }
 
     // =====================
-    // 09:20 ALERT (FULL PROMPT STRUCTURE)
+    // 09:20 ALERT
     // =====================
 
     if (mode === "0920") {
 
       let firstSweep = null
       let sweepTime = null
+      let conviction = "NONE"
 
       for (const c of candles) {
 
@@ -145,29 +198,82 @@ IF London sweeps ASIA LOW FIRST
         const h = oslo.getHours()
         const min = oslo.getMinutes()
 
-        // 08:00–09:20 window
         if (h < 8 || (h === 9 && min > 20) || h > 9) continue
 
         const high = parseFloat(c.high)
         const low = parseFloat(c.low)
         const close = parseFloat(c.close)
 
-        if (!firstSweep && high > asiaHigh && close <= asiaHigh) {
-          firstSweep = "Asia high"
-          sweepTime = `${h}:${String(min).padStart(2,"0")}`
+        // 🔥 MID CLUSTER FIRST
+        if (!firstSweep && hasCluster) {
+
+          if (asiaDir === "UP") {
+            if (low < clusterLow && close >= clusterLow) {
+              firstSweep = "MID LOW"
+              sweepTime = `${h}:${String(min).padStart(2,"0")}`
+            }
+          }
+
+          if (asiaDir === "DOWN") {
+            if (high > clusterHigh && close <= clusterHigh) {
+              firstSweep = "MID HIGH"
+              sweepTime = `${h}:${String(min).padStart(2,"0")}`
+            }
+          }
         }
 
-        if (!firstSweep && low < asiaLow && close >= asiaLow) {
-          firstSweep = "Asia low"
-          sweepTime = `${h}:${String(min).padStart(2,"0")}`
+        // 🔁 FALLBACK TO ASIA
+        if (!firstSweep) {
+
+          if (high > asiaHigh && close <= asiaHigh) {
+            firstSweep = "ASIA HIGH"
+            sweepTime = `${h}:${String(min).padStart(2,"0")}`
+          }
+
+          if (low < asiaLow && close >= asiaLow) {
+            firstSweep = "ASIA LOW"
+            sweepTime = `${h}:${String(min).padStart(2,"0")}`
+          }
         }
       }
+
+      // =====================
+      // CONVICTION
+      // =====================
+
+      if (firstSweep) {
+
+        const isEarly = sweepTime && (
+          parseInt(sweepTime.split(":")[0]) === 9 &&
+          parseInt(sweepTime.split(":")[1]) <= 15
+        )
+
+        if (
+          firstSweep.includes("MID") &&
+          range >= 15 &&
+          isEarly
+        ) {
+          conviction = "HIGH"
+        }
+        else if (range >= 15) {
+          conviction = "MEDIUM"
+        }
+        else {
+          conviction = "LOW"
+        }
+      }
+
+      // =====================
+      // MESSAGE
+      // =====================
 
       let msg
 
       if (firstSweep) {
 
-        const direction = firstSweep.includes("high") ? "lower" : "higher"
+        const direction = firstSweep.includes("HIGH")
+          ? "lower"
+          : "higher"
 
         msg =
 `London Update
@@ -179,18 +285,14 @@ Type: ${firstSweep}
 Time of sweep: ${sweepTime}
 
 Direction:
-If sweep ${firstSweep.includes("high") ? "high" : "low"} → expect move ${direction}
+If sweep ${firstSweep.includes("HIGH") ? "high" : "low"} → expect move ${direction}
 
 Context:
-Asia direction: Not available (v1)
-Previous day direction: Not available (v1)
-Late Asia behavior: Not available (v1)
-
-Alignment:
-Mixed
+Asia direction: ${asiaDir}
+Range: ${range.toFixed(1)} pips
 
 Conviction:
-MEDIUM
+${conviction}
 
 Final line:
 
@@ -205,18 +307,12 @@ No valid sweep detected yet
 
 No active edge
 
-Timing note:
-Most sweeps occur before 09:15
-
-If sweep occurs later → reduced probability
-
 Context:
-Not available (v1)
+Range: ${range.toFixed(1)} pips
 
 Final line:
 
-Wait for first sweep
-or LIT setup if no clear move develops`
+Wait for first sweep`
       }
 
       await sendTelegram(msg)
@@ -227,7 +323,6 @@ or LIT setup if no clear move develops`
   } catch (err) {
 
     console.error(err)
-
     await sendTelegram(`❌ Engine error: ${err.message}`)
 
     return res.status(200).json({ ok: true })
